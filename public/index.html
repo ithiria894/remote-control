@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#20201e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>remote-control</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <div class="brand">
+            <div class="brand-mark">RC</div>
+            <div>
+              <div class="brand-title">remote-control</div>
+              <div class="brand-subtitle">Research preview</div>
+            </div>
+          </div>
+          <button id="refreshButton" class="sidebar-icon">Refresh</button>
+        </div>
+
+        <button id="newButton" class="sidebar-primary">New session</button>
+
+        <div class="sidebar-controls">
+          <button class="ghost">Scheduled</button>
+          <button class="ghost">All projects</button>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="section-label">Sessions</div>
+          <div id="sessionGroups" class="session-groups"></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-copy">
+            <div class="session-eyebrow">Codex native bridge</div>
+            <div id="sessionTitle" class="session-title">New session</div>
+            <div id="threadMeta" class="thread-meta">No active thread</div>
+          </div>
+
+          <div class="topbar-actions">
+            <button class="ghost">Share</button>
+            <button class="ghost">Session options</button>
+          </div>
+        </header>
+
+        <section id="transcript" class="transcript"></section>
+
+        <div class="status-rail">
+          <div id="connectionStatus" class="status-chip">Connecting…</div>
+          <div id="sessionState" class="status-chip subtle">idle</div>
+          <div id="cwdSummary" class="cwd-summary">workspace</div>
+          <button id="stopButton" class="danger">Stop</button>
+        </div>
+
+        <form id="composer" class="composer">
+          <textarea id="promptInput" placeholder="Reply..." rows="3"></textarea>
+          <div class="composer-footer">
+            <div class="composer-controls">
+              <select id="providerSelect" class="control slim">
+                <option value="codex">Codex</option>
+                <option value="gemini">Gemini</option>
+              </select>
+              <input id="cwdInput" class="control cwd-input" placeholder="/path/to/project" />
+              <button id="applyCwdButton" class="ghost">Set cwd</button>
+            </div>
+            <button id="submitButton" type="submit">Submit</button>
+          </div>
+          <div id="eventFeed" class="event-strip"></div>
+        </form>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

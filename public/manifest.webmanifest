@@ -1,0 +1,9 @@
+{
+  "name": "remote-control",
+  "short_name": "remote-control",
+  "description": "Native-style Codex remote workbench.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f3",
+  "theme_color": "#20201e"
+}
