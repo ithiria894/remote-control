@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AppConfig } from "../config.js";
 import { ProviderRegistry } from "../providers/registry.js";
+import { listActiveLocalCodexSessions, type ActiveLocalSessionSummary } from "./active-local-sessions.js";
 import { SessionStore } from "../storage/session-store.js";
 import type {
   ProviderKind,
@@ -27,6 +28,8 @@ export type ConversationView = {
   conversation: StoredConversation;
   sessions: StoredConversation[];
   activeThread: ProviderThreadDetails | null;
+  availableThreads: ProviderThreadSummary[];
+  activeLocalSessions: ActiveLocalSessionSummary[];
 };
 
 type PromptStreamOptions = {
@@ -98,6 +101,17 @@ export class ChatService {
     const activeThread = conversation.providerThreadId
       ? await provider.readThread(conversation.providerThreadId, true)
       : null;
+    let availableThreads: ProviderThreadSummary[] = [];
+    let activeLocalSessions: ActiveLocalSessionSummary[] = [];
+
+    try {
+      availableThreads = await provider.listThreads(24);
+    } catch {
+      availableThreads = [];
+    }
+    if (conversation.provider === "codex") {
+      activeLocalSessions = await listActiveLocalCodexSessions();
+    }
 
     if (activeThread) {
       const updates: Partial<
@@ -122,7 +136,9 @@ export class ChatService {
     return {
       conversation,
       sessions: this.store.listOwned(transport, transportId),
-      activeThread
+      activeThread,
+      availableThreads,
+      activeLocalSessions
     };
   }
 
@@ -232,6 +248,43 @@ export class ChatService {
     };
   }
 
+  async syncActiveLocalConversations(
+    transport: TransportKind,
+    transportId: string
+  ): Promise<{ imported: number; active: number }> {
+    const activeLocalSessions = await listActiveLocalCodexSessions();
+    const existing = new Set(
+      this.store
+        .listOwned(transport, transportId)
+        .map(conversation => conversation.providerThreadId)
+        .filter(Boolean)
+    );
+
+    let imported = 0;
+    for (const session of activeLocalSessions) {
+      if (existing.has(session.threadId)) {
+        continue;
+      }
+
+      const created = await this.store.createConversation(
+        transport,
+        transportId,
+        "codex",
+        session.cwd,
+        undefined,
+        session.tty ? `Terminal ${session.tty}` : "Imported terminal"
+      );
+      await this.attachThread(transport, transportId, created.id, session.threadId);
+      existing.add(session.threadId);
+      imported += 1;
+    }
+
+    return {
+      imported,
+      active: activeLocalSessions.length
+    };
+  }
+
   async *runPrompt(options: PromptStreamOptions): AsyncGenerator<ChatStreamEvent> {
     const conversation = await this.ensureConversation(
       options.transport,
@@ -269,6 +322,23 @@ export class ChatService {
         yield {
           type: "status",
           message: `已建立新 ${current.provider} thread`
+        };
+      } else {
+        const handle = await provider.resumeSession({
+          threadId: current.providerThreadId,
+          cwd: current.cwd,
+          model: this.providerModel(current.provider),
+          modelProvider: this.providerModelProvider(current.provider)
+        });
+
+        current = await this.store.patch(current.key, {
+          providerThreadId: handle.threadId,
+          cwd: handle.cwd
+        });
+
+        yield {
+          type: "status",
+          message: `已接手現有 ${current.provider} thread`
         };
       }
 

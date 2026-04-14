@@ -18,6 +18,8 @@ type ClientMessage =
   | { type: "init"; clientId: string; sessionId?: string | null }
   | { type: "refresh" }
   | { type: "new" }
+  | { type: "import"; threadId: string }
+  | { type: "sync-active-local" }
   | { type: "select"; sessionId: string }
   | { type: "stop" }
   | { type: "attach"; threadId: string }
@@ -120,6 +122,27 @@ export async function createWebServer(config: AppConfig, chatService: ChatServic
             await withClient(socket, state, async clientId => {
               const created = await chatService.createConversation("web", clientId);
               state.sessionId = created.id;
+              await sendState(socket, chatService, state);
+            });
+            return;
+          case "import":
+            await withClient(socket, state, async clientId => {
+              const created = await chatService.createConversation("web", clientId, "Imported thread");
+              state.sessionId = created.id;
+              await chatService.attachThread("web", clientId, state.sessionId, message.threadId);
+              await sendState(socket, chatService, state);
+            });
+            return;
+          case "sync-active-local":
+            await withClient(socket, state, async clientId => {
+              const result = await chatService.syncActiveLocalConversations("web", clientId);
+              send(
+                socket,
+                {
+                  type: "info",
+                  message: `Imported ${result.imported} of ${result.active} active local terminal sessions.`
+                }
+              );
               await sendState(socket, chatService, state);
             });
             return;

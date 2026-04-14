@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#20201e" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>remote-control</title>
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -34,6 +35,14 @@
         <div class="sidebar-section">
           <div class="section-label">Sessions</div>
           <div id="sessionGroups" class="session-groups"></div>
+        </div>
+
+        <div class="sidebar-section sidebar-section-secondary">
+          <div class="sidebar-section-head">
+            <div class="section-label">Active Local Terminals</div>
+            <button id="syncActiveButton" class="sidebar-icon sidebar-icon-small">Sync</button>
+          </div>
+          <div id="nativeThreadList" class="session-groups"></div>
         </div>
       </aside>
 
@@ -69,7 +78,7 @@
                 <option value="gemini">Gemini</option>
               </select>
               <input id="cwdInput" class="control cwd-input" placeholder="/path/to/project" />
-              <button id="applyCwdButton" class="ghost">Set cwd</button>
+              <button id="applyCwdButton" type="button" class="ghost">Set cwd</button>
             </div>
             <button id="submitButton" type="submit">Submit</button>
           </div>

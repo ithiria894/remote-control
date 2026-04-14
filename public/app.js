@@ -14,6 +14,8 @@ const elements = {
   threadMeta: document.getElementById("threadMeta"),
   sessionState: document.getElementById("sessionState"),
   sessionGroups: document.getElementById("sessionGroups"),
+  syncActiveButton: document.getElementById("syncActiveButton"),
+  nativeThreadList: document.getElementById("nativeThreadList"),
   cwdSummary: document.getElementById("cwdSummary"),
   transcript: document.getElementById("transcript"),
   composer: document.getElementById("composer"),
@@ -35,6 +37,7 @@ bindUi();
 function bindUi() {
   elements.refreshButton.addEventListener("click", () => send({ type: "refresh" }));
   elements.newButton.addEventListener("click", () => send({ type: "new" }));
+  elements.syncActiveButton.addEventListener("click", () => send({ type: "sync-active-local" }));
   elements.stopButton.addEventListener("click", () => send({ type: "stop" }));
   elements.applyCwdButton.addEventListener("click", () => {
     const cwd = elements.cwdInput.value.trim();
@@ -148,12 +151,14 @@ function consumeEvent(sessionId, event) {
       addEvent(sessionId, `turn started: ${event.turnId}`);
       return;
     case "turn.completed":
+      resetLive(sessionId);
       addEvent(sessionId, `turn ${event.status}`);
       return;
     case "status":
       addEvent(sessionId, event.message);
       return;
     case "error":
+      resetLive(sessionId);
       addEvent(sessionId, `error: ${event.message}`);
       return;
     default:
@@ -188,6 +193,14 @@ function ensureLive(sessionId) {
   return state.liveBySession[key];
 }
 
+function resetLive(sessionId) {
+  const live = ensureLive(sessionId);
+  live.pendingPrompt = "";
+  live.assistant = "";
+  live.reasoning = "";
+  live.command = "";
+}
+
 function currentSessionId() {
   return state.view?.conversation?.id || state.activeSessionId || null;
 }
@@ -218,20 +231,26 @@ function render() {
 
   elements.sessionTitle.textContent = conversation?.title || "New session";
   elements.threadMeta.textContent = activeThread
-    ? `${activeThread.name || conversation?.title || "Untitled"} · ${basename(activeThread.cwd)}`
+    ? `${activeThread.name || conversation?.title || "Untitled"} · ${basename(activeThread.cwd)} · ${shortThreadId(activeThread.id)}`
     : conversation
       ? `${conversation.title} · ${basename(conversation.cwd)}`
       : "No active session";
   elements.cwdSummary.textContent = conversation?.cwd || "workspace";
 
   renderSessionList();
+  renderNativeThreadList();
   renderTranscript();
   renderActivity();
 }
 
 function renderSessionList() {
-  const sessions = state.view?.sessions || [];
   const activeId = currentSessionId();
+  const sessions = (state.view?.sessions || []).filter(
+    session =>
+      session.id === activeId ||
+      session.status === "running" ||
+      Boolean(session.providerThreadId)
+  );
   elements.sessionGroups.innerHTML = "";
 
   if (sessions.length === 0) {
@@ -270,26 +289,75 @@ function renderSessionList() {
   }
 }
 
+function renderNativeThreadList() {
+  const container = elements.nativeThreadList;
+  container.innerHTML = "";
+
+  const sessions = state.view?.sessions || [];
+  const attachedSessionsByThreadId = new Map(
+    sessions
+      .filter(session => session.providerThreadId)
+      .map(session => [session.providerThreadId, session])
+  );
+  const activeLocalSessions = state.view?.activeLocalSessions || [];
+
+  if (!activeLocalSessions.length) {
+    container.innerHTML = '<div class="empty-sidebar">No active local terminals right now.</div>';
+    return;
+  }
+
+  const wrapper = document.createElement("section");
+  wrapper.className = "session-group";
+
+  for (const thread of activeLocalSessions) {
+    const attachedSession = attachedSessionsByThreadId.get(thread.threadId);
+    const button = document.createElement("button");
+    button.className = "thread-item native-thread-item";
+    button.innerHTML = `
+      <div class="thread-item-topline">
+        <div class="thread-item-titleline">
+          <span class="active-dot"></span>
+          <div class="thread-item-title">${escapeHtml(thread.tty ? `pts/${thread.tty}` : "local terminal")}</div>
+        </div>
+        <div class="thread-item-status">${escapeHtml(attachedSession ? "synced" : shortThreadId(thread.threadId))}</div>
+      </div>
+      <div class="thread-item-preview">${escapeHtml(attachedSession?.title || basename(thread.cwd))} · ${escapeHtml(thread.cwd)}</div>
+    `;
+    button.addEventListener("click", () => {
+      if (attachedSession) {
+        setActiveSessionId(attachedSession.id);
+        send({ type: "select", sessionId: attachedSession.id });
+        return;
+      }
+      send({ type: "import", threadId: thread.threadId });
+    });
+    wrapper.appendChild(button);
+  }
+
+  container.appendChild(wrapper);
+}
+
 function renderTranscript() {
   const container = elements.transcript;
   container.innerHTML = "";
 
   const transcript = state.view?.activeThread?.transcript || [];
+  const showLiveStream = currentConversation()?.status === "running";
   for (const entry of transcript) {
     container.appendChild(renderEntry(entry));
   }
 
   const live = currentLive();
-  if (live.pendingPrompt) {
+  if (showLiveStream && live.pendingPrompt) {
     container.appendChild(renderBubble("user", live.pendingPrompt, "Pending"));
   }
-  if (live.reasoning.trim()) {
+  if (showLiveStream && live.reasoning.trim()) {
     container.appendChild(renderBubble("reasoning", live.reasoning, "Thinking"));
   }
-  if (live.assistant.trim()) {
+  if (showLiveStream && live.assistant.trim()) {
     container.appendChild(renderBubble("assistant", live.assistant, "Assistant"));
   }
-  if (live.command.trim()) {
+  if (showLiveStream && live.command.trim()) {
     container.appendChild(renderBubble("tool", live.command, "Command output"));
   }
 
@@ -352,6 +420,10 @@ function sessionPreview(session) {
     return "Attached to native thread";
   }
   return "No turns yet";
+}
+
+function shortThreadId(threadId) {
+  return threadId ? threadId.slice(0, 8) : "native";
 }
 
 function relativeTime(iso) {
