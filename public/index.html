@@ -2,8 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#20201e" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f7f3" />
+    <meta name="color-scheme" content="light" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -22,15 +23,13 @@
               <div class="brand-subtitle">Research preview</div>
             </div>
           </div>
-          <button id="refreshButton" class="sidebar-icon">Refresh</button>
+          <div class="sidebar-head-actions">
+            <button id="refreshButton" type="button" class="sidebar-icon" aria-label="Refresh sessions">Refresh</button>
+            <button id="sidebarCloseButton" type="button" class="sidebar-icon mobile-sidebar-close" aria-label="Close sessions">Close</button>
+          </div>
         </div>
 
-        <button id="newButton" class="sidebar-primary">New session</button>
-
-        <div class="sidebar-controls">
-          <button class="ghost">Scheduled</button>
-          <button class="ghost">All projects</button>
-        </div>
+        <button id="newButton" type="button" class="sidebar-primary">New chat</button>
 
         <div class="sidebar-section">
           <div class="section-label">Sessions</div>
@@ -40,23 +39,20 @@
         <div class="sidebar-section sidebar-section-secondary">
           <div class="sidebar-section-head">
             <div class="section-label">Active Local Terminals</div>
-            <button id="syncActiveButton" class="sidebar-icon sidebar-icon-small">Sync</button>
+            <button id="syncActiveButton" type="button" class="sidebar-icon sidebar-icon-small" aria-label="Sync active local terminals">Sync</button>
           </div>
           <div id="nativeThreadList" class="session-groups"></div>
         </div>
       </aside>
+      <button id="sidebarBackdrop" type="button" class="sidebar-backdrop" aria-label="Close sessions"></button>
 
       <main class="main">
         <header class="topbar">
+          <button id="sidebarToggleButton" type="button" class="sidebar-icon mobile-sidebar-toggle" aria-label="Open recent sessions" aria-expanded="false">Recents</button>
           <div class="topbar-copy">
-            <div class="session-eyebrow">Codex native bridge</div>
+            <div class="session-eyebrow">Remote control</div>
             <div id="sessionTitle" class="session-title">New session</div>
             <div id="threadMeta" class="thread-meta">No active thread</div>
-          </div>
-
-          <div class="topbar-actions">
-            <button class="ghost">Share</button>
-            <button class="ghost">Session options</button>
           </div>
         </header>
 
@@ -66,21 +62,42 @@
           <div id="connectionStatus" class="status-chip">Connecting…</div>
           <div id="sessionState" class="status-chip subtle">idle</div>
           <div id="cwdSummary" class="cwd-summary">workspace</div>
-          <button id="stopButton" class="danger">Stop</button>
+          <button id="stopButton" type="button" class="danger" aria-label="Stop active turn">Stop</button>
         </div>
 
         <form id="composer" class="composer">
-          <textarea id="promptInput" placeholder="Reply..." rows="3"></textarea>
+          <div class="composer-head">
+            <div class="composer-copy">
+              <div class="composer-label">Ask Codex</div>
+              <div id="composerHint" class="composer-hint">Write the next prompt, revision, or question here.</div>
+            </div>
+            <div id="composerHelp" class="composer-shortcut">Enter to send, Shift+Enter for a newline</div>
+          </div>
+          <textarea
+            id="promptInput"
+            aria-label="Message input"
+            aria-describedby="composerHint composerHelp"
+            placeholder="Type a prompt, revision, or question..."
+            rows="3"
+            spellcheck="false"
+          ></textarea>
+          <div id="composerSettings" class="composer-settings" hidden>
+            <input id="cwdInput" class="control cwd-input" placeholder="/path/to/project" spellcheck="false" autocapitalize="off" autocorrect="off" />
+            <button id="applyCwdButton" type="button" class="ghost">Apply workspace</button>
+          </div>
           <div class="composer-footer">
-            <div class="composer-controls">
-              <select id="providerSelect" class="control slim">
+            <div class="composer-actions">
+              <div id="providerPills" class="provider-pills" role="group" aria-label="Provider">
+                <button type="button" class="provider-pill active" data-provider="codex" aria-pressed="true">Codex</button>
+                <button type="button" class="provider-pill" data-provider="gemini" aria-pressed="false">Gemini</button>
+              </div>
+              <select id="providerSelect" class="control slim provider-select-native" aria-label="Provider" tabindex="-1" aria-hidden="true">
                 <option value="codex">Codex</option>
                 <option value="gemini">Gemini</option>
               </select>
-              <input id="cwdInput" class="control cwd-input" placeholder="/path/to/project" />
-              <button id="applyCwdButton" type="button" class="ghost">Set cwd</button>
+              <button id="composerSettingsButton" type="button" class="ghost composer-settings-toggle" aria-expanded="false">Workspace</button>
+              <button id="submitButton" type="submit">Send</button>
             </div>
-            <button id="submitButton" type="submit">Submit</button>
           </div>
           <div id="eventFeed" class="event-strip"></div>
         </form>

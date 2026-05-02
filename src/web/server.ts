@@ -21,11 +21,11 @@ type ClientMessage =
   | { type: "import"; threadId: string }
   | { type: "sync-active-local" }
   | { type: "select"; sessionId: string }
-  | { type: "stop" }
-  | { type: "attach"; threadId: string }
-  | { type: "prompt"; text: string }
-  | { type: "cwd"; cwd: string }
-  | { type: "provider"; provider: ProviderKind };
+  | { type: "stop"; sessionId?: string | null }
+  | { type: "attach"; threadId: string; sessionId?: string | null }
+  | { type: "prompt"; text: string; sessionId?: string | null }
+  | { type: "cwd"; cwd: string; sessionId?: string | null }
+  | { type: "provider"; provider: ProviderKind; sessionId?: string | null };
 
 type SocketState = {
   clientId: string | null;
@@ -71,6 +71,12 @@ export async function createWebServer(config: AppConfig, chatService: ChatServic
         return;
       }
 
+      if (url === "/favicon.ico") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
       response.end("Not found");
     } catch (error) {
@@ -95,9 +101,19 @@ export async function createWebServer(config: AppConfig, chatService: ChatServic
 
   wsServer.on("connection", socket => {
     const state: SocketState = { clientId: null, sessionId: null };
+    let messageChain = Promise.resolve();
     send(socket, { type: "hello", clientId: null });
 
-    socket.on("message", async raw => {
+    socket.on("message", raw => {
+      messageChain = messageChain
+        .then(() => handleClientMessage(raw))
+        .catch(error => {
+          const text = error instanceof Error ? error.message : String(error);
+          send(socket, { type: "error", message: text });
+        });
+    });
+
+    async function handleClientMessage(raw: WebSocket.RawData): Promise<void> {
       let message: ClientMessage;
       try {
         message = JSON.parse(raw.toString()) as ClientMessage;
@@ -106,104 +122,118 @@ export async function createWebServer(config: AppConfig, chatService: ChatServic
         return;
       }
 
-      try {
-        switch (message.type) {
-          case "init": {
-            state.clientId = message.clientId;
-            state.sessionId = message.sessionId ?? null;
-            await chatService.ensureConversation("web", message.clientId, state.sessionId);
-            await sendState(socket, chatService, state);
-            return;
-          }
-          case "refresh":
-            await withClient(socket, state, () => sendState(socket, chatService, state));
-            return;
-          case "new":
-            await withClient(socket, state, async clientId => {
-              const created = await chatService.createConversation("web", clientId);
-              state.sessionId = created.id;
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "import":
-            await withClient(socket, state, async clientId => {
-              const created = await chatService.createConversation("web", clientId, "Imported thread");
-              state.sessionId = created.id;
-              await chatService.attachThread("web", clientId, state.sessionId, message.threadId);
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "sync-active-local":
-            await withClient(socket, state, async clientId => {
-              const result = await chatService.syncActiveLocalConversations("web", clientId);
-              send(
-                socket,
-                {
-                  type: "info",
-                  message: `Imported ${result.imported} of ${result.active} active local terminal sessions.`
-                }
-              );
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "select":
-            await withClient(socket, state, async () => {
-              state.sessionId = message.sessionId;
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "stop":
-            await withClient(socket, state, async clientId => {
-              const status = await chatService.stopConversation("web", clientId, state.sessionId);
-              send(socket, { type: "info", message: status });
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "attach":
-            await withClient(socket, state, async clientId => {
-              await chatService.attachThread("web", clientId, state.sessionId, message.threadId);
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "cwd":
-            await withClient(socket, state, async clientId => {
-              await chatService.setConversationCwd("web", clientId, state.sessionId, message.cwd);
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "provider":
-            await withClient(socket, state, async clientId => {
-              await chatService.setConversationProvider(
-                "web",
-                clientId,
-                state.sessionId,
-                message.provider
-              );
-              await sendState(socket, chatService, state);
-            });
-            return;
-          case "prompt":
-            await withClient(socket, state, async clientId => {
-              const targetSessionId = state.sessionId;
-              for await (const event of chatService.runPrompt({
-                transport: "web",
-                transportId: clientId,
-                sessionId: targetSessionId,
-                prompt: message.text
-              })) {
-                send(socket, { type: "event", sessionId: targetSessionId, event });
-              }
-              await sendState(socket, chatService, state);
-            });
-            return;
-          default:
-            send(socket, { type: "error", message: "Unsupported client message." });
+      switch (message.type) {
+        case "init": {
+          state.clientId = message.clientId;
+          state.sessionId = message.sessionId ?? null;
+          await chatService.ensureConversation("web", message.clientId, state.sessionId);
+          await sendState(socket, chatService, state);
+          return;
         }
-      } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        send(socket, { type: "error", message: text });
+        case "refresh":
+          await withClient(socket, state, () => sendState(socket, chatService, state));
+          return;
+        case "new":
+          await withClient(socket, state, async clientId => {
+            const created = await chatService.createConversation("web", clientId);
+            state.sessionId = created.id;
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "import":
+          await withClient(socket, state, async clientId => {
+            const created = await chatService.createConversation("web", clientId, "Imported thread");
+            state.sessionId = created.id;
+            await chatService.attachThread("web", clientId, state.sessionId, message.threadId);
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "sync-active-local":
+          await withClient(socket, state, async clientId => {
+            const result = await chatService.syncActiveLocalConversations("web", clientId);
+            send(
+              socket,
+              {
+                type: "info",
+                message: `Imported ${result.imported} of ${result.active} active local terminal sessions.`
+              }
+            );
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "select":
+          await withClient(socket, state, async () => {
+            state.sessionId = message.sessionId;
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "stop":
+          await withClient(socket, state, async clientId => {
+            const targetSessionId = message.sessionId ?? state.sessionId;
+            if (message.sessionId) {
+              state.sessionId = message.sessionId;
+            }
+            const status = await chatService.stopConversation("web", clientId, targetSessionId);
+            send(socket, { type: "info", message: status });
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "attach":
+          await withClient(socket, state, async clientId => {
+            const targetSessionId = message.sessionId ?? state.sessionId;
+            if (message.sessionId) {
+              state.sessionId = message.sessionId;
+            }
+            await chatService.attachThread("web", clientId, targetSessionId, message.threadId);
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "cwd":
+          await withClient(socket, state, async clientId => {
+            const targetSessionId = message.sessionId ?? state.sessionId;
+            if (message.sessionId) {
+              state.sessionId = message.sessionId;
+            }
+            await chatService.setConversationCwd("web", clientId, targetSessionId, message.cwd);
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "provider":
+          await withClient(socket, state, async clientId => {
+            const targetSessionId = message.sessionId ?? state.sessionId;
+            if (message.sessionId) {
+              state.sessionId = message.sessionId;
+            }
+            await chatService.setConversationProvider(
+              "web",
+              clientId,
+              targetSessionId,
+              message.provider
+            );
+            await sendState(socket, chatService, state);
+          });
+          return;
+        case "prompt":
+          await withClient(socket, state, async clientId => {
+            const targetSessionId = message.sessionId ?? state.sessionId;
+            if (message.sessionId) {
+              state.sessionId = message.sessionId;
+            }
+            for await (const event of chatService.runPrompt({
+              transport: "web",
+              transportId: clientId,
+              sessionId: targetSessionId,
+              prompt: message.text
+            })) {
+              send(socket, { type: "event", sessionId: targetSessionId, event });
+            }
+            await sendState(socket, chatService, state);
+          });
+          return;
+        default:
+          send(socket, { type: "error", message: "Unsupported client message." });
       }
-    });
+    }
   });
 
   return {

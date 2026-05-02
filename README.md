@@ -68,6 +68,12 @@ Useful env vars:
 - `REMOTE_CONTROL_CODEX_CONFIG_OVERRIDES` passes one `-c key=value` override per line when auto-spawning
 - `TELEGRAM_ALLOWED_CHAT_IDS` limits which chats can control the optional Telegram bot
 
+Platform notes:
+
+- The main web/runtime flow is intended to run on macOS, Linux, and Windows
+- Active local Codex terminal discovery currently works on macOS and Linux
+- On Windows, the app still works, but the "Active Local Terminals" sidebar is currently unavailable
+
 Open the web workbench:
 
 ```bash

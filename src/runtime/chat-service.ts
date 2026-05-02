@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 import type { AppConfig } from "../config.js";
 import { ProviderRegistry } from "../providers/registry.js";
-import { listActiveLocalCodexSessions, type ActiveLocalSessionSummary } from "./active-local-sessions.js";
+import {
+  listActiveLocalCodexSessions,
+  supportsActiveLocalCodexSessions,
+  type ActiveLocalSessionSummary
+} from "./active-local-sessions.js";
 import { SessionStore } from "../storage/session-store.js";
 import type {
   ProviderKind,
@@ -30,6 +35,8 @@ export type ConversationView = {
   activeThread: ProviderThreadDetails | null;
   availableThreads: ProviderThreadSummary[];
   activeLocalSessions: ActiveLocalSessionSummary[];
+  activeLocalSessionsSupported: boolean;
+  platform: NodeJS.Platform;
 };
 
 type PromptStreamOptions = {
@@ -110,7 +117,11 @@ export class ChatService {
       availableThreads = [];
     }
     if (conversation.provider === "codex") {
-      activeLocalSessions = await listActiveLocalCodexSessions();
+      try {
+        activeLocalSessions = await listActiveLocalCodexSessions();
+      } catch {
+        activeLocalSessions = [];
+      }
     }
 
     if (activeThread) {
@@ -138,7 +149,9 @@ export class ChatService {
       sessions: this.store.listOwned(transport, transportId),
       activeThread,
       availableThreads,
-      activeLocalSessions
+      activeLocalSessions,
+      activeLocalSessionsSupported: supportsActiveLocalCodexSessions(),
+      platform: process.platform
     };
   }
 

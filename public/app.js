@@ -3,12 +3,21 @@ const state = {
   activeSessionId: localStorage.getItem("remote-control-active-session-id") || null,
   connection: "connecting",
   view: null,
-  liveBySession: {}
+  liveBySession: {},
+  creatingSession: false,
+  creatingSessionFromId: null,
+  queuedPrompt: null,
+  mobileSidebarOpen: false,
+  composerSettingsOpen: false
 };
 
 localStorage.setItem("remote-control-client-id", state.clientId);
 
 const elements = {
+  sidebar: document.querySelector(".sidebar"),
+  sidebarBackdrop: document.getElementById("sidebarBackdrop"),
+  sidebarToggleButton: document.getElementById("sidebarToggleButton"),
+  sidebarCloseButton: document.getElementById("sidebarCloseButton"),
   connectionStatus: document.getElementById("connectionStatus"),
   sessionTitle: document.getElementById("sessionTitle"),
   threadMeta: document.getElementById("threadMeta"),
@@ -19,7 +28,11 @@ const elements = {
   cwdSummary: document.getElementById("cwdSummary"),
   transcript: document.getElementById("transcript"),
   composer: document.getElementById("composer"),
+  composerSettings: document.getElementById("composerSettings"),
+  composerSettingsButton: document.getElementById("composerSettingsButton"),
   promptInput: document.getElementById("promptInput"),
+  submitButton: document.getElementById("submitButton"),
+  providerPills: document.getElementById("providerPills"),
   refreshButton: document.getElementById("refreshButton"),
   newButton: document.getElementById("newButton"),
   stopButton: document.getElementById("stopButton"),
@@ -36,18 +49,52 @@ bindUi();
 
 function bindUi() {
   elements.refreshButton.addEventListener("click", () => send({ type: "refresh" }));
-  elements.newButton.addEventListener("click", () => send({ type: "new" }));
+  elements.newButton.addEventListener("click", () => {
+    closeSidebar();
+    state.creatingSession = true;
+    state.creatingSessionFromId = currentSessionId();
+    render();
+    send({ type: "new" });
+  });
+  elements.sidebarToggleButton.addEventListener("click", toggleSidebar);
+  elements.sidebarCloseButton.addEventListener("click", closeSidebar);
+  elements.sidebarBackdrop.addEventListener("click", closeSidebar);
   elements.syncActiveButton.addEventListener("click", () => send({ type: "sync-active-local" }));
-  elements.stopButton.addEventListener("click", () => send({ type: "stop" }));
+  elements.stopButton.addEventListener("click", () => {
+    send({ type: "stop", sessionId: currentSessionId() });
+  });
   elements.applyCwdButton.addEventListener("click", () => {
     const cwd = elements.cwdInput.value.trim();
     if (cwd) {
-      send({ type: "cwd", cwd });
+      state.composerSettingsOpen = false;
+      render();
+      send({ type: "cwd", cwd, sessionId: currentSessionId() });
     }
   });
-  elements.providerSelect.addEventListener("change", () => {
-    send({ type: "provider", provider: elements.providerSelect.value });
+  elements.composerSettingsButton.addEventListener("click", () => {
+    state.composerSettingsOpen = !state.composerSettingsOpen;
+    render();
   });
+  elements.providerSelect.addEventListener("change", () => {
+    send({
+      type: "provider",
+      provider: elements.providerSelect.value,
+      sessionId: currentSessionId()
+    });
+  });
+  elements.providerPills.addEventListener("click", event => {
+    const button = event.target.closest(".provider-pill");
+    if (!button || button.disabled) {
+      return;
+    }
+    const provider = button.dataset.provider;
+    if (!provider || provider === elements.providerSelect.value) {
+      return;
+    }
+    elements.providerSelect.value = provider;
+    elements.providerSelect.dispatchEvent(new Event("change"));
+  });
+  elements.promptInput.addEventListener("input", () => render());
   elements.composer.addEventListener("submit", event => {
     event.preventDefault();
     const text = elements.promptInput.value.trim();
@@ -55,16 +102,28 @@ function bindUi() {
       return;
     }
 
-    const sessionId = currentSessionId();
-    const live = ensureLive(sessionId);
-    live.pendingPrompt = text;
-    live.assistant = "";
-    live.reasoning = "";
-    live.command = "";
-    addEvent(sessionId, `prompt: ${text.slice(0, 120)}`);
-    render();
-    send({ type: "prompt", text });
     elements.promptInput.value = "";
+    state.composerSettingsOpen = false;
+
+    if (state.creatingSession) {
+      state.queuedPrompt = text;
+      render();
+      return;
+    }
+
+    submitPrompt(text);
+  });
+
+  window.addEventListener("resize", () => {
+    if (!isMobileViewport()) {
+      closeSidebar();
+    }
+  });
+
+  window.addEventListener("keydown", event => {
+    if (event.key === "Escape") {
+      closeSidebar();
+    }
   });
 }
 
@@ -99,13 +158,37 @@ function handleMessage(message) {
     case "hello":
       return;
     case "state":
-      state.view = message.data;
-      if (state.view?.conversation) {
-        setActiveSessionId(state.view.conversation.id);
-        ensureLive(state.view.conversation.id);
-        elements.providerSelect.value = state.view.conversation.provider;
-        elements.cwdInput.value = state.view.conversation.cwd;
-        elements.sessionState.textContent = state.view.conversation.status;
+      {
+        const queuedPrompt = state.queuedPrompt;
+
+        state.view = message.data;
+        if (state.view?.conversation) {
+          setActiveSessionId(state.view.conversation.id);
+          ensureLive(state.view.conversation.id);
+          if (state.view.conversation.status !== "running") {
+            resetLive(state.view.conversation.id);
+          }
+          elements.providerSelect.value = state.view.conversation.provider;
+          elements.cwdInput.value = state.view.conversation.cwd;
+          elements.sessionState.textContent = state.view.conversation.status;
+
+          if (
+            state.creatingSession &&
+            queuedPrompt &&
+            state.view.conversation.id !== state.creatingSessionFromId
+          ) {
+            state.creatingSession = false;
+            state.creatingSessionFromId = null;
+            state.queuedPrompt = null;
+            submitPrompt(queuedPrompt);
+          } else if (
+            state.creatingSession &&
+            state.view.conversation.id !== state.creatingSessionFromId
+          ) {
+            state.creatingSession = false;
+            state.creatingSessionFromId = null;
+          }
+        }
       }
       render();
       return;
@@ -148,16 +231,29 @@ function consumeEvent(sessionId, event) {
       addEvent(sessionId, `tool ${event.success ? "ok" : "fail"}: ${event.label}`);
       return;
     case "turn.started":
+      patchSession(sessionId, {
+        status: "running",
+        activeTurnId: event.turnId,
+        lastError: null
+      });
       addEvent(sessionId, `turn started: ${event.turnId}`);
       return;
     case "turn.completed":
-      resetLive(sessionId);
+      patchSession(sessionId, {
+        status: event.status === "failed" ? "error" : "idle",
+        activeTurnId: null
+      });
       addEvent(sessionId, `turn ${event.status}`);
       return;
     case "status":
       addEvent(sessionId, event.message);
       return;
     case "error":
+      patchSession(sessionId, {
+        status: "error",
+        activeTurnId: null,
+        lastError: event.message
+      });
       resetLive(sessionId);
       addEvent(sessionId, `error: ${event.message}`);
       return;
@@ -213,6 +309,62 @@ function currentLive() {
   return ensureLive(currentSessionId());
 }
 
+function submitPrompt(text) {
+  const sessionId = currentSessionId();
+  const live = ensureLive(sessionId);
+  live.pendingPrompt = text;
+  live.assistant = "";
+  live.reasoning = "";
+  live.command = "";
+  patchSession(sessionId, conversation => ({
+    status: "running",
+    activeTurnId: null,
+    lastError: null,
+    sidebarPreview: previewText(text, 96),
+    title:
+      conversation?.title === "New session"
+        ? previewText(text, 48) || conversation.title
+        : conversation?.title
+  }));
+  addEvent(sessionId, `prompt: ${text.slice(0, 120)}`);
+  render();
+  send({ type: "prompt", text, sessionId });
+}
+
+function patchSession(sessionId, updates) {
+  if (!state.view || !sessionId) {
+    return;
+  }
+
+  const current =
+    state.view.conversation?.id === sessionId
+      ? state.view.conversation
+      : (state.view.sessions || []).find(session => session.id === sessionId) || null;
+  const nextPatch = typeof updates === "function" ? updates(current) : updates;
+
+  if (!nextPatch) {
+    return;
+  }
+
+  if (state.view.conversation?.id === sessionId) {
+    state.view.conversation = {
+      ...state.view.conversation,
+      ...nextPatch
+    };
+  }
+
+  if (Array.isArray(state.view.sessions)) {
+    state.view.sessions = state.view.sessions.map(session =>
+      session.id === sessionId
+        ? {
+            ...session,
+            ...nextPatch
+          }
+        : session
+    );
+  }
+}
+
 function setActiveSessionId(sessionId) {
   state.activeSessionId = sessionId;
   if (sessionId) {
@@ -223,11 +375,16 @@ function setActiveSessionId(sessionId) {
 }
 
 function render() {
+  document.body.classList.toggle("sidebar-open", state.mobileSidebarOpen);
+  document.body.classList.toggle("composer-settings-open", state.composerSettingsOpen);
+  elements.sidebarToggleButton.setAttribute("aria-expanded", String(state.mobileSidebarOpen));
   elements.connectionStatus.textContent = state.connection;
   elements.connectionStatus.dataset.state = state.connection;
 
   const conversation = currentConversation();
   const activeThread = state.view?.activeThread;
+  const hasState = Boolean(state.view?.conversation);
+  const canInteract = state.connection === "connected" && hasState;
 
   elements.sessionTitle.textContent = conversation?.title || "New session";
   elements.threadMeta.textContent = activeThread
@@ -235,10 +392,26 @@ function render() {
     : conversation
       ? `${conversation.title} · ${basename(conversation.cwd)}`
       : "No active session";
+  elements.sessionState.textContent = conversation?.status || "idle";
   elements.cwdSummary.textContent = conversation?.cwd || "workspace";
+  elements.refreshButton.disabled = !canInteract;
+  elements.newButton.disabled = !canInteract;
+  elements.syncActiveButton.disabled = !canInteract;
+  elements.stopButton.disabled = !canInteract || conversation?.status !== "running";
+  elements.stopButton.hidden = conversation?.status !== "running";
+  elements.providerSelect.disabled = !canInteract || conversation?.status === "running";
+  elements.composerSettingsButton.disabled = !canInteract || conversation?.status === "running";
+  elements.cwdInput.disabled = !canInteract || conversation?.status === "running";
+  elements.applyCwdButton.disabled = !canInteract || conversation?.status === "running";
+  elements.promptInput.disabled = !canInteract;
+  elements.submitButton.disabled = !canInteract || !elements.promptInput.value.trim();
+  elements.composerSettings.hidden = !state.composerSettingsOpen;
+  elements.composerSettingsButton.setAttribute("aria-expanded", String(state.composerSettingsOpen));
+  elements.composerSettingsButton.textContent = workspaceButtonLabel(conversation?.cwd);
 
   renderSessionList();
   renderNativeThreadList();
+  renderProviderPills(conversation?.provider || elements.providerSelect.value);
   renderTranscript();
   renderActivity();
 }
@@ -279,6 +452,7 @@ function renderSessionList() {
         <div class="thread-item-preview">${escapeHtml(sessionPreview(session))}</div>
       `;
       button.addEventListener("click", () => {
+        closeSidebar();
         setActiveSessionId(session.id);
         send({ type: "select", sessionId: session.id });
       });
@@ -292,6 +466,13 @@ function renderSessionList() {
 function renderNativeThreadList() {
   const container = elements.nativeThreadList;
   container.innerHTML = "";
+
+  if (state.view?.activeLocalSessionsSupported === false) {
+    container.innerHTML = `<div class="empty-sidebar">Active local terminal sync is not available on ${escapeHtml(
+      state.view.platform || "this OS"
+    )} yet.</div>`;
+    return;
+  }
 
   const sessions = state.view?.sessions || [];
   const attachedSessionsByThreadId = new Map(
@@ -324,6 +505,7 @@ function renderNativeThreadList() {
       <div class="thread-item-preview">${escapeHtml(attachedSession?.title || basename(thread.cwd))} · ${escapeHtml(thread.cwd)}</div>
     `;
     button.addEventListener("click", () => {
+      closeSidebar();
       if (attachedSession) {
         setActiveSessionId(attachedSession.id);
         send({ type: "select", sessionId: attachedSession.id });
@@ -342,12 +524,20 @@ function renderTranscript() {
   container.innerHTML = "";
 
   const transcript = state.view?.activeThread?.transcript || [];
-  const showLiveStream = currentConversation()?.status === "running";
+  const live = currentLive();
+  const showLiveStream =
+    currentConversation()?.status === "running" ||
+    Boolean(
+      live.pendingPrompt.trim() ||
+        live.reasoning.trim() ||
+        live.assistant.trim() ||
+        live.command.trim()
+    );
+
   for (const entry of transcript) {
     container.appendChild(renderEntry(entry));
   }
 
-  const live = currentLive();
   if (showLiveStream && live.pendingPrompt) {
     container.appendChild(renderBubble("user", live.pendingPrompt, "Pending"));
   }
@@ -407,6 +597,7 @@ function renderActivity() {
     .slice(0, 8)
     .map(item => `<div class="event-pill">${escapeHtml(item.at)} · ${escapeHtml(item.text)}</div>`)
     .join("");
+  elements.eventFeed.hidden = live.events.length === 0;
 }
 
 function sessionPreview(session) {
@@ -457,6 +648,40 @@ function shortStatus(status) {
   return "Idle";
 }
 
+function workspaceButtonLabel(cwd) {
+  const name = basename(cwd || "");
+  if (!name || name === "/") {
+    return "Workspace";
+  }
+  return `Workspace: ${name}`;
+}
+
+function renderProviderPills(activeProvider) {
+  for (const button of elements.providerPills.querySelectorAll(".provider-pill")) {
+    const isActive = button.dataset.provider === activeProvider;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+    button.disabled = elements.providerSelect.disabled;
+  }
+}
+
+function toggleSidebar() {
+  state.mobileSidebarOpen = !state.mobileSidebarOpen;
+  render();
+}
+
+function closeSidebar() {
+  if (!state.mobileSidebarOpen) {
+    return;
+  }
+  state.mobileSidebarOpen = false;
+  render();
+}
+
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 980px)").matches;
+}
+
 function groupSessionsByDay(sessions) {
   const today = [];
   const yesterday = [];
@@ -493,7 +718,7 @@ function basename(pathname) {
   if (!pathname) {
     return "workspace";
   }
-  const parts = pathname.split("/").filter(Boolean);
+  const parts = String(pathname).split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] || pathname;
 }
 
@@ -511,4 +736,14 @@ function escapeHtml(text) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function previewText(input, limit) {
+  const normalized = String(input || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.slice(0, limit);
 }
